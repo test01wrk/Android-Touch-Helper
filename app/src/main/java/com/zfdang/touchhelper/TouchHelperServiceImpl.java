@@ -44,8 +44,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 public class TouchHelperServiceImpl {
@@ -63,8 +63,7 @@ public class TouchHelperServiceImpl {
 
     public Handler receiverHandler;
 
-    private ScheduledExecutorService executorService;
-    private ScheduledFuture futureExpireSkipAdProcess;
+    private ScheduledExecutorService taskExecutorService;
 
     private volatile boolean skipAdRunning, skipad_by_activity_position, skipad_by_activity_widget, skipad_by_keyword;
     private PackageManager packageManager;
@@ -76,7 +75,7 @@ public class TouchHelperServiceImpl {
 
     private Map<String, PackagePositionDescription> mapPackagePositions;
     private Map<String, Set<PackageWidgetDescription>> mapPackageWidgets;
-    private Set<PackageWidgetDescription> setTargetedWidgets;
+    private volatile Set<PackageWidgetDescription> setTargetedWidgets;
 
     // try to click 5 times, first click after 300ms, and delayed for 500ms for future clicks
     static final int PackagePositionClickFirstDelay = 300;
@@ -147,12 +146,7 @@ public class TouchHelperServiceImpl {
             InstallReceiverAndHandler();
 
             // create future task
-            executorService = Executors.newSingleThreadScheduledExecutor();
-            futureExpireSkipAdProcess = executorService.schedule(new Runnable() {
-                @Override
-                public void run() {
-                }
-            }, 0, TimeUnit.MILLISECONDS);
+            taskExecutorService = Executors.newSingleThreadScheduledExecutor();
         } catch (Throwable e) {
             Log.e(TAG, Utilities.getTraceStackInString(e));
         }
@@ -174,7 +168,7 @@ public class TouchHelperServiceImpl {
         service.registerReceiver(packageChangeReceiver, actions);
 
         // install handler to handle broadcast messages
-        receiverHandler = new Handler(new Handler.Callback() {
+        receiverHandler = new Handler(Looper.getMainLooper(), new Handler.Callback() {
             @Override
             public boolean handleMessage(Message msg) {
                 switch (msg.what) {
@@ -204,6 +198,9 @@ public class TouchHelperServiceImpl {
                     case TouchHelperService.ACTION_START_SKIPAD:
 //                        Log.d(TAG, "resume from wakeup and start to skip ads now ...");
                         startSkipAdProcess();
+                        break;
+                    case TouchHelperService.ACTION_STOP_SKIPAD:
+                        stopSkipAdProcessInner();
                         break;
                 }
                 return true;
@@ -309,7 +306,8 @@ public class TouchHelperServiceImpl {
                             ShowToastInIntentService("正在根据位置跳过广告...");
 
                             // try to click the position in the activity for multiple times
-                            executorService.scheduleAtFixedRate(new Runnable() {
+                            final Future<?>[] futures = {null};
+                            futures[0] = taskExecutorService.scheduleAtFixedRate(new Runnable() {
                                 int num = 0;
                                 @Override
                                 public void run() {
@@ -321,7 +319,7 @@ public class TouchHelperServiceImpl {
                                         }
                                         num ++;
                                     } else {
-                                        throw new RuntimeException();
+                                        futures[0].cancel(true);
                                     }
                                 }
                             }, PackagePositionClickFirstDelay, PackagePositionClickRetryInterval, TimeUnit.MILLISECONDS);
@@ -338,13 +336,16 @@ public class TouchHelperServiceImpl {
                     if(setTargetedWidgets != null) {
 //                            Log.d(TAG, "Find skip-ad by widget, simulate click ");
                         // this code could be run multiple times
-                        skipAdByTargetedWidget(service.getRootInActiveWindow(), setTargetedWidgets);
+                        final AccessibilityNodeInfo node = service.getRootInActiveWindow();
+                        final Set<PackageWidgetDescription> widgets = setTargetedWidgets;
+                        taskExecutorService.execute(() -> skipAdByTargetedWidget(node, widgets));
                     }
 
                     if (skipad_by_keyword) {
 //                        Log.d(TAG, "method by keywords in STATE_CHANGED");
                         // this code could be run multiple times
-                        skipAdByKeywords(service.getRootInActiveWindow());
+                        final AccessibilityNodeInfo node = service.getRootInActiveWindow();
+                        taskExecutorService.execute(() -> skipAdByKeywords(node));
                     }
                     break;
                 case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
@@ -354,12 +355,15 @@ public class TouchHelperServiceImpl {
 
                     if (setTargetedWidgets != null) {
 //                        Log.d(TAG, "method by widget in CONTENT_CHANGED");
-                        skipAdByTargetedWidget(event.getSource(), setTargetedWidgets);
+                        final AccessibilityNodeInfo node = event.getSource();
+                        final Set<PackageWidgetDescription> widgets = setTargetedWidgets;
+                        taskExecutorService.execute(() -> skipAdByTargetedWidget(node, widgets));
                     }
 
                     if (skipad_by_keyword) {
 //                        Log.d(TAG, "method by keywords in CONTENT_CHANGED");
-                        skipAdByKeywords(event.getSource());
+                        final AccessibilityNodeInfo node = event.getSource();
+                        taskExecutorService.execute(() -> skipAdByKeywords(node));
                     }
                     break;
 //                case AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED:
@@ -503,7 +507,7 @@ public class TouchHelperServiceImpl {
                                 }
                             }
                             // clear setWidgets, stop trying
-                            setTargetedWidgets = null;
+                            if (setTargetedWidgets == set) setTargetedWidgets = null;
                             return;
                         }
                     }
@@ -593,15 +597,8 @@ public class TouchHelperServiceImpl {
         clickedWidgets.clear();
 
         // cancel all methods N seconds later
-        if( !futureExpireSkipAdProcess.isCancelled() && !futureExpireSkipAdProcess.isDone()) {
-            futureExpireSkipAdProcess.cancel(true);
-        }
-        futureExpireSkipAdProcess = executorService.schedule(new Runnable() {
-            @Override
-            public void run() {
-                stopSkipAdProcessInner();
-            }
-        }, mSetting.getSkipAdDuration() * 1000, TimeUnit.MILLISECONDS);
+        receiverHandler.removeMessages(TouchHelperService.ACTION_STOP_SKIPAD);
+        receiverHandler.sendEmptyMessageDelayed(TouchHelperService.ACTION_STOP_SKIPAD, mSetting.getSkipAdDuration() * 1000L);
     }
 
     /**
@@ -610,9 +607,7 @@ public class TouchHelperServiceImpl {
     private void stopSkipAdProcess() {
 //        Log.d(TAG, "Stop Skip-ad process");
         stopSkipAdProcessInner();
-        if( !futureExpireSkipAdProcess.isCancelled() && !futureExpireSkipAdProcess.isDone()) {
-            futureExpireSkipAdProcess.cancel(false);
-        }
+        receiverHandler.removeMessages(TouchHelperService.ACTION_STOP_SKIPAD);
     }
 
     /**
