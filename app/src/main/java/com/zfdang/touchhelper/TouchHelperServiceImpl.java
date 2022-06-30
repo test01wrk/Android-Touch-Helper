@@ -66,7 +66,7 @@ public class TouchHelperServiceImpl {
     private ScheduledExecutorService executorService;
     private ScheduledFuture futureExpireSkipAdProcess;
 
-    private boolean skipad_by_activity_position, skipad_by_activity_widget, skipad_by_keyword;
+    private volatile boolean skipAdRunning, skipad_by_activity_position, skipad_by_activity_widget, skipad_by_keyword;
     private PackageManager packageManager;
     private String currentPackageName, currentActivityName;
     private String packageName;
@@ -395,7 +395,7 @@ public class TouchHelperServiceImpl {
         int total = listA.size();
         int index = 0;
         boolean isFind = false;
-        while (index < total && !isFind) {
+        while (index < total && !isFind && skipAdRunning) {
             AccessibilityNodeInfo node = listA.get(index++);
             if (node != null) {
                 CharSequence description = node.getContentDescription();
@@ -465,7 +465,7 @@ public class TouchHelperServiceImpl {
 
         int length = listA.size();
         int index = 0;
-        while (index < length) {
+        while (index < length && skipAdRunning) {
             AccessibilityNodeInfo node = listA.get(index++);
             if (node != null) {
                 Rect temRect = new Rect();
@@ -585,6 +585,7 @@ public class TouchHelperServiceImpl {
      */
     private void startSkipAdProcess() {
 //        Log.d(TAG, "Start Skip-ad process");
+        skipAdRunning = true;
         skipad_by_activity_position = true;
         skipad_by_activity_widget = true;
         skipad_by_keyword = true;
@@ -618,6 +619,7 @@ public class TouchHelperServiceImpl {
      * stop the skip-ad process, without cancel scheduled task
      */
     private void stopSkipAdProcessInner() {
+        skipAdRunning = false;
         skipad_by_activity_position = false;
         skipad_by_activity_widget = false;
         skipad_by_keyword = false;
