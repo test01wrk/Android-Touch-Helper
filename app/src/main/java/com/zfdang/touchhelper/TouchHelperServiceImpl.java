@@ -398,30 +398,30 @@ public class TouchHelperServiceImpl {
 
         int total = listA.size();
         int index = 0;
-        boolean isFind = false;
-        while (index < total && !isFind && skipAdRunning) {
+        while (index < total && skipAdRunning) {
             AccessibilityNodeInfo node = listA.get(index++);
             if (node != null) {
                 CharSequence description = node.getContentDescription();
                 CharSequence text = node.getText();
 
                 // try to find keyword
+                boolean isFound = false;
                 for (String keyword: keyWordList) {
                     // text or description contains keyword, but not too long （<= length + 6）
                     if (text != null && (text.toString().length() <= keyword.length() + 6 ) && text.toString().contains(keyword) && !text.toString().equals(SelfPackageName)) {
-                        isFind = true;
+                        isFound = true;
                     } else if (description != null && (description.toString().length() <= keyword.length() + 6) && description.toString().contains(keyword)  && !description.toString().equals(SelfPackageName)) {
-                        isFind = true;
+                        isFound = true;
                     }
-                    if(isFind) {
+                    if(isFound) {
                         // if this node matches our target, stop finding more keywords
 //                        Log.d(TAG, "identify keyword = " + keyword);
                         break;
                     }
                 }
-
+                boolean clickHandled = false;
                 // if this node matches our target, try to click it
-                if (isFind) {
+                if (isFound) {
                     String nodeDesc = Utilities.describeAccessibilityNode(node);
 //                    Log.d(TAG, nodeDesc);
                     if(!clickedWidgets.contains(nodeDesc)){
@@ -437,11 +437,13 @@ public class TouchHelperServiceImpl {
                         }
 
                         // is it possible that there are more nodes to click and this node does not work?
-                        // don't stop looking for more nodes
-//                        break;
+                        clickHandled = true;
                     }
                 }
-
+                if (clickHandled) {
+                    node.recycle();
+                    break;
+                }
                 // find all children nodes
                 for (int n = 0; n < node.getChildCount(); n++) {
                     listB.add(node.getChild(n));
@@ -457,6 +459,17 @@ public class TouchHelperServiceImpl {
                 total = listA.size();
             }
         }
+        // ensure unprocessed nodes get recycled
+        while (index < total) {
+            AccessibilityNodeInfo node = listA.get(index++);
+            if (node != null) node.recycle();
+        }
+        index = 0;
+        total = listB.size();
+        while (index < total) {
+            AccessibilityNodeInfo node = listB.get(index++);
+            if (node != null) node.recycle();
+        }
     }
 
     /**
@@ -467,9 +480,9 @@ public class TouchHelperServiceImpl {
         listA.add(root);
         ArrayList<AccessibilityNodeInfo> listB = new ArrayList<>();
 
-        int length = listA.size();
+        int total = listA.size();
         int index = 0;
-        while (index < length && skipAdRunning) {
+        while (index < total && skipAdRunning) {
             AccessibilityNodeInfo node = listA.get(index++);
             if (node != null) {
                 Rect temRect = new Rect();
@@ -477,19 +490,20 @@ public class TouchHelperServiceImpl {
                 CharSequence cId = node.getViewIdResourceName();
                 CharSequence cDescribe = node.getContentDescription();
                 CharSequence cText = node.getText();
+                boolean clickHandled = false;
                 for (PackageWidgetDescription e : set) {
-                    boolean isFind = false;
+                    boolean isFound = false;
                     if (temRect.equals(e.position)) {
-                        isFind = true;
+                        isFound = true;
                     } else if (cId != null && !e.idName.isEmpty() && cId.toString().equals(e.idName)) {
-                        isFind = true;
+                        isFound = true;
                     } else if (cDescribe != null && !e.description.isEmpty() && cDescribe.toString().contains(e.description)) {
-                        isFind = true;
+                        isFound = true;
                     } else if (cText != null && !e.text.isEmpty() && cText.toString().contains(e.text)) {
-                        isFind = true;
+                        isFound = true;
                     }
 
-                    if (isFind) {
+                    if (isFound) {
 //                        Log.d(TAG, "Find skip-ad by Widget " + e.toString());
                         String nodeDesc = Utilities.describeAccessibilityNode(node);
                         if(!clickedWidgets.contains(nodeDesc)) {
@@ -508,24 +522,39 @@ public class TouchHelperServiceImpl {
                             }
                             // clear setWidgets, stop trying
                             if (setTargetedWidgets == set) setTargetedWidgets = null;
-                            return;
+                            clickHandled = true;
+                            break;
                         }
                     }
+                }
+                if (clickHandled) {
+                    node.recycle();
+                    break;
                 }
                 for (int n = 0; n < node.getChildCount(); n++) {
                     listB.add(node.getChild(n));
                 }
                 node.recycle();
             }
-            if (index == length) {
+            if (index == total) {
                 index = 0;
-                length = listB.size();
+                total = listB.size();
                 listA = listB;
                 listB = new ArrayList<>();
             }
         }
+        // ensure unprocessed nodes get recycled
+        while (index < total) {
+            AccessibilityNodeInfo node = listA.get(index++);
+            if (node != null) node.recycle();
+        }
+        index = 0;
+        total = listB.size();
+        while (index < total) {
+            AccessibilityNodeInfo node = listB.get(index++);
+            if (node != null) node.recycle();
+        }
     }
-
 
     private void showAllChildren(AccessibilityNodeInfo root){
         ArrayList<AccessibilityNodeInfo> roots = new ArrayList<>();
