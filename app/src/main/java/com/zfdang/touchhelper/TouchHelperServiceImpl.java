@@ -17,6 +17,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
@@ -338,14 +339,14 @@ public class TouchHelperServiceImpl {
                         // this code could be run multiple times
                         final AccessibilityNodeInfo node = service.getRootInActiveWindow();
                         final Set<PackageWidgetDescription> widgets = setTargetedWidgets;
-                        taskExecutorService.execute(() -> skipAdByTargetedWidget(node, widgets));
+                        taskExecutorService.execute(() -> iterateNodesToSkipAd(node, widgets));
                     }
 
                     if (skipad_by_keyword) {
 //                        Log.d(TAG, "method by keywords in STATE_CHANGED");
                         // this code could be run multiple times
                         final AccessibilityNodeInfo node = service.getRootInActiveWindow();
-                        taskExecutorService.execute(() -> skipAdByKeywords(node));
+                        taskExecutorService.execute(() -> iterateNodesToSkipAd(node, null));
                     }
                     break;
                 case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
@@ -357,13 +358,13 @@ public class TouchHelperServiceImpl {
 //                        Log.d(TAG, "method by widget in CONTENT_CHANGED");
                         final AccessibilityNodeInfo node = event.getSource();
                         final Set<PackageWidgetDescription> widgets = setTargetedWidgets;
-                        taskExecutorService.execute(() -> skipAdByTargetedWidget(node, widgets));
+                        taskExecutorService.execute(() -> iterateNodesToSkipAd(node, widgets));
                     }
 
                     if (skipad_by_keyword) {
 //                        Log.d(TAG, "method by keywords in CONTENT_CHANGED");
                         final AccessibilityNodeInfo node = event.getSource();
-                        taskExecutorService.execute(() -> skipAdByKeywords(node));
+                        taskExecutorService.execute(() -> iterateNodesToSkipAd(node, null));
                     }
                     break;
 //                case AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED:
@@ -373,7 +374,6 @@ public class TouchHelperServiceImpl {
             Log.e(TAG, Utilities.getTraceStackInString(e));
         }
     }
-
 
     public void onUnbind(Intent intent) {
         try {
@@ -385,175 +385,151 @@ public class TouchHelperServiceImpl {
     }
 
     /**
-     * 查找并点击包含keyword控件，目标包括Text和Description
-     * * */
-    private void skipAdByKeywords(AccessibilityNodeInfo root) {
-//        Log.d(TAG, "skipAdByKeywords triggered: " + Utilities.describeAccessibilityNode(root));
+     * 遍历节点跳过广告
+     * @param root 根节点
+     * @param set 传入set时按控件判断，否则按关键词判断
+     */
+    private void iterateNodesToSkipAd(AccessibilityNodeInfo root, Set<PackageWidgetDescription> set) {
+        ArrayList<AccessibilityNodeInfo> topNodes = new ArrayList<>();
+        topNodes.add(root);
+        ArrayList<AccessibilityNodeInfo> childNodes = new ArrayList<>();
 
-        ArrayList<AccessibilityNodeInfo> listA = new ArrayList<>();
-        ArrayList<AccessibilityNodeInfo> listB = new ArrayList<>();
-        listA.add(root);
-
-//        showAllChildren(root);
-
-        int total = listA.size();
+        int total = topNodes.size();
         int index = 0;
+        AccessibilityNodeInfo node;
+        boolean handled;
         while (index < total && skipAdRunning) {
-            AccessibilityNodeInfo node = listA.get(index++);
+            node = topNodes.get(index++);
             if (node != null) {
-                CharSequence description = node.getContentDescription();
-                CharSequence text = node.getText();
-
-                // try to find keyword
-                boolean isFound = false;
-                for (String keyword: keyWordList) {
-                    // text or description contains keyword, but not too long （<= length + 6）
-                    if (text != null && (text.toString().length() <= keyword.length() + 6 ) && text.toString().contains(keyword) && !text.toString().equals(SelfPackageName)) {
-                        isFound = true;
-                    } else if (description != null && (description.toString().length() <= keyword.length() + 6) && description.toString().contains(keyword)  && !description.toString().equals(SelfPackageName)) {
-                        isFound = true;
-                    }
-                    if(isFound) {
-                        // if this node matches our target, stop finding more keywords
-//                        Log.d(TAG, "identify keyword = " + keyword);
-                        break;
-                    }
+                if (set != null) {
+                    handled = skipAdByTargetedWidget(node, set);
+                } else {
+                    handled = skipAdByKeywords(node);
                 }
-                boolean clickHandled = false;
-                // if this node matches our target, try to click it
-                if (isFound) {
-                    String nodeDesc = Utilities.describeAccessibilityNode(node);
-//                    Log.d(TAG, nodeDesc);
-                    if(!clickedWidgets.contains(nodeDesc)){
-                        clickedWidgets.add(nodeDesc);
-
-                        ShowToastInIntentService("正在根据关键字跳过广告...");
-                        boolean clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-//                        Log.d(TAG, "self clicked = " + clicked);
-                        if (!clicked) {
-                            Rect rect = new Rect();
-                            node.getBoundsInScreen(rect);
-                            click(rect.centerX(), rect.centerY(), 0, 20);
-                        }
-
-                        // is it possible that there are more nodes to click and this node does not work?
-                        clickHandled = true;
-                    }
-                }
-                if (clickHandled) {
+                if (handled) {
                     node.recycle();
                     break;
                 }
-                // find all children nodes
                 for (int n = 0; n < node.getChildCount(); n++) {
-                    listB.add(node.getChild(n));
+                    childNodes.add(node.getChild(n));
                 }
                 node.recycle();
             }
-
-            // reach the end of listA
             if (index == total) {
-                listA = listB;
-                listB = new ArrayList<>();
+                // topNodes ends, now iterate child nodes
+                topNodes.clear();
+                topNodes.addAll(childNodes);
+                childNodes.clear();
                 index = 0;
-                total = listA.size();
+                total = topNodes.size();
             }
         }
         // ensure unprocessed nodes get recycled
         while (index < total) {
-            AccessibilityNodeInfo node = listA.get(index++);
+            node = topNodes.get(index++);
             if (node != null) node.recycle();
         }
         index = 0;
-        total = listB.size();
+        total = childNodes.size();
         while (index < total) {
-            AccessibilityNodeInfo node = listB.get(index++);
+            node = childNodes.get(index++);
             if (node != null) node.recycle();
         }
     }
 
     /**
+     * 查找并点击包含keyword控件，目标包括Text和Description
+     */
+    private boolean skipAdByKeywords(AccessibilityNodeInfo node) {
+//        Log.d(TAG, "skipAdByKeywords triggered: " + Utilities.describeAccessibilityNode(root));
+        CharSequence description = node.getContentDescription();
+        CharSequence text = node.getText();
+        if (TextUtils.isEmpty(description) && TextUtils.isEmpty(text)) {
+            return false;
+        }
+        // try to find keyword
+        boolean isFound = false;
+        for (String keyword: keyWordList) {
+            // text or description contains keyword, but not too long （<= length + 6）
+            if (text != null && (text.toString().length() <= keyword.length() + 6 ) && text.toString().contains(keyword) && !text.toString().equals(SelfPackageName)) {
+                isFound = true;
+            } else if (description != null && (description.toString().length() <= keyword.length() + 6) && description.toString().contains(keyword)  && !description.toString().equals(SelfPackageName)) {
+                isFound = true;
+            }
+            if (isFound) {
+                // if this node matches our target, stop finding more keywords
+//                Log.d(TAG, "identify keyword = " + keyword);
+                break;
+            }
+        }
+        // if this node matches our target, try to click it
+        if (isFound) {
+            String nodeDesc = Utilities.describeAccessibilityNode(node);
+//            Log.d(TAG, nodeDesc);
+            if (!clickedWidgets.contains(nodeDesc)) {
+                clickedWidgets.add(nodeDesc);
+
+                ShowToastInIntentService("正在根据关键字跳过广告...");
+                boolean clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+//                        Log.d(TAG, "self clicked = " + clicked);
+                if (!clicked) {
+                    Rect rect = new Rect();
+                    node.getBoundsInScreen(rect);
+                    click(rect.centerX(), rect.centerY(), 0, 20);
+                }
+
+                // is it possible that there are more nodes to click and this node does not work?
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 查找并点击由 ActivityWidgetDescription 定义的控件
      */
-    private void skipAdByTargetedWidget(AccessibilityNodeInfo root, Set<PackageWidgetDescription> set) {
-        ArrayList<AccessibilityNodeInfo> listA = new ArrayList<>();
-        listA.add(root);
-        ArrayList<AccessibilityNodeInfo> listB = new ArrayList<>();
+    private boolean skipAdByTargetedWidget(AccessibilityNodeInfo node, Set<PackageWidgetDescription> set) {
+        Rect temRect = new Rect();
+        node.getBoundsInScreen(temRect);
+        CharSequence cId = node.getViewIdResourceName();
+        CharSequence cDescribe = node.getContentDescription();
+        CharSequence cText = node.getText();
+        for (PackageWidgetDescription e : set) {
+            boolean isFound = false;
+            if (temRect.equals(e.position)) {
+                isFound = true;
+            } else if (cId != null && !e.idName.isEmpty() && cId.toString().equals(e.idName)) {
+                isFound = true;
+            } else if (cDescribe != null && !e.description.isEmpty() && cDescribe.toString().contains(e.description)) {
+                isFound = true;
+            } else if (cText != null && !e.text.isEmpty() && cText.toString().contains(e.text)) {
+                isFound = true;
+            }
 
-        int total = listA.size();
-        int index = 0;
-        while (index < total && skipAdRunning) {
-            AccessibilityNodeInfo node = listA.get(index++);
-            if (node != null) {
-                Rect temRect = new Rect();
-                node.getBoundsInScreen(temRect);
-                CharSequence cId = node.getViewIdResourceName();
-                CharSequence cDescribe = node.getContentDescription();
-                CharSequence cText = node.getText();
-                boolean clickHandled = false;
-                for (PackageWidgetDescription e : set) {
-                    boolean isFound = false;
-                    if (temRect.equals(e.position)) {
-                        isFound = true;
-                    } else if (cId != null && !e.idName.isEmpty() && cId.toString().equals(e.idName)) {
-                        isFound = true;
-                    } else if (cDescribe != null && !e.description.isEmpty() && cDescribe.toString().contains(e.description)) {
-                        isFound = true;
-                    } else if (cText != null && !e.text.isEmpty() && cText.toString().contains(e.text)) {
-                        isFound = true;
-                    }
+            if (isFound) {
+//                Log.d(TAG, "Find skip-ad by Widget " + e.toString());
+                String nodeDesc = Utilities.describeAccessibilityNode(node);
+                if(!clickedWidgets.contains(nodeDesc)) {
+                    // add this widget to clicked widget, avoid multiple click on the same widget
+                    clickedWidgets.add(nodeDesc);
 
-                    if (isFound) {
-//                        Log.d(TAG, "Find skip-ad by Widget " + e.toString());
-                        String nodeDesc = Utilities.describeAccessibilityNode(node);
-                        if(!clickedWidgets.contains(nodeDesc)) {
-                            // add this widget to clicked widget, avoid multiple click on the same widget
-                            clickedWidgets.add(nodeDesc);
-
-                            ShowToastInIntentService("正在根据控件跳过广告...");
-                            if (e.onlyClick) {
+                    ShowToastInIntentService("正在根据控件跳过广告...");
+                    if (e.onlyClick) {
+                        click(temRect.centerX(), temRect.centerY(), 0, 20);
+                    } else {
+                        if (!node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                            if (!node.getParent().performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                                 click(temRect.centerX(), temRect.centerY(), 0, 20);
-                            } else {
-                                if (!node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                                    if (!node.getParent().performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                                        click(temRect.centerX(), temRect.centerY(), 0, 20);
-                                    }
-                                }
                             }
-                            // clear setWidgets, stop trying
-                            if (setTargetedWidgets == set) setTargetedWidgets = null;
-                            clickHandled = true;
-                            break;
                         }
                     }
+                    // clear setWidgets, stop trying
+                    if (setTargetedWidgets == set) setTargetedWidgets = null;
+                    return true;
                 }
-                if (clickHandled) {
-                    node.recycle();
-                    break;
-                }
-                for (int n = 0; n < node.getChildCount(); n++) {
-                    listB.add(node.getChild(n));
-                }
-                node.recycle();
-            }
-            if (index == total) {
-                index = 0;
-                total = listB.size();
-                listA = listB;
-                listB = new ArrayList<>();
             }
         }
-        // ensure unprocessed nodes get recycled
-        while (index < total) {
-            AccessibilityNodeInfo node = listA.get(index++);
-            if (node != null) node.recycle();
-        }
-        index = 0;
-        total = listB.size();
-        while (index < total) {
-            AccessibilityNodeInfo node = listB.get(index++);
-            if (node != null) node.recycle();
-        }
+        return false;
     }
 
     private void showAllChildren(AccessibilityNodeInfo root){
