@@ -13,7 +13,6 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
@@ -63,11 +62,11 @@ public class TouchHelperServiceImpl {
 
     private ScheduledExecutorService taskExecutorService;
 
-    private volatile boolean skipAdRunning, skipad_by_activity_position, skipad_by_activity_widget, skipad_by_keyword;
+    private volatile boolean skipAdRunning, skipAdByActivityPosition, skipAdByActivityWidget, skipAdByKeyword;
     private PackageManager packageManager;
     private String currentPackageName, currentActivityName;
     private String packageName;
-    private Set<String> setPackages, setIMEApps, setHomes, setWhiteList;
+    private Set<String> setPackages, setIMEApps, setWhiteList;
     private Set<String> clickedWidgets;
     private List<String> keyWordList;
 
@@ -76,9 +75,9 @@ public class TouchHelperServiceImpl {
     private volatile Set<PackageWidgetDescription> setTargetedWidgets;
 
     // try to click 5 times, first click after 300ms, and delayed for 500ms for future clicks
-    static final int PackagePositionClickFirstDelay = 300;
-    static final int PackagePositionClickRetryInterval = 500;
-    static final int PackagePositionClickRetry = 6;
+    private static final int PACKAGE_POSITION_CLICK_FIRST_DELAY = 300;
+    private static final int PACKAGE_POSITION_CLICK_RETRY_INTERVAL = 500;
+    private static final int PACKAGE_POSITION_CLICK_RETRY = 6;
 
     public TouchHelperServiceImpl(AccessibilityService service) {
         this.service = service;
@@ -124,7 +123,9 @@ public class TouchHelperServiceImpl {
 
             // key words
             keyWordList = mSetting.getKeyWordList();
-//            Log.d(TAG, keyWordList.toString());
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, keyWordList.toString());
+            }
 
             // whitelist of packages
             setWhiteList = mSetting.getWhitelistPackages();
@@ -138,7 +139,7 @@ public class TouchHelperServiceImpl {
             updatePackage();
 
             // init clickedWidgets
-            clickedWidgets = new HashSet<String>();
+            clickedWidgets = new HashSet<>();
 
             // install receiver and handler for broadcasting events
             InstallReceiverAndHandler();
@@ -169,18 +170,24 @@ public class TouchHelperServiceImpl {
             switch (msg.what) {
                 case TouchHelperService.ACTION_REFRESH_KEYWORDS:
                     keyWordList = mSetting.getKeyWordList();
-//                        Log.d(TAG, keyWordList.toString());
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, keyWordList.toString());
+                    }
                     break;
                 case TouchHelperService.ACTION_REFRESH_PACKAGE:
                     setWhiteList = mSetting.getWhitelistPackages();
-//                        Log.d(TAG, setWhiteList.toString());
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, setWhiteList.toString());
+                    }
                     updatePackage();
                     break;
                 case TouchHelperService.ACTION_REFRESH_CUSTOMIZED_ACTIVITY:
                     mapPackageWidgets = mSetting.getPackageWidgets();
                     mapPackagePositions = mSetting.getPackagePositions();
-//                        Log.d(TAG, mapActivityWidgets.keySet().toString());
-//                        Log.d(TAG, mapActivityPositions.keySet().toString());
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, mapPackageWidgets.keySet().toString());
+                        Log.d(TAG, mapPackagePositions.keySet().toString());
+                    }
                     break;
                 case TouchHelperService.ACTION_STOP_SERVICE:
                     service.disableSelf();
@@ -189,7 +196,9 @@ public class TouchHelperServiceImpl {
                     showActivityCustomizationDialog();
                     break;
                 case TouchHelperService.ACTION_START_SKIPAD:
-//                        Log.d(TAG, "resume from wakeup and start to skip ads now ...");
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, "resume from wakeup and start to skip ads now ...");
+                    }
                     startSkipAdProcess();
                     break;
                 case TouchHelperService.ACTION_STOP_SKIPAD:
@@ -238,23 +247,23 @@ public class TouchHelperServiceImpl {
     // 1. TYPE_WINDOW_STATE_CHANGED, 判断packageName和activityName,决定是否开始跳过检测; 然后使用三种方法去尝试跳过
     // 2. TYPE_WINDOW_CONTENT_CHANGED, 使用两种方法去尝试跳过
     public void onAccessibilityEvent(AccessibilityEvent event) {
-//        Log.d(TAG, AccessibilityEvent.eventTypeToString(event.getEventType()) + " - " + event.getPackageName() + " - " + event.getClassName() + "; ");
-//        Log.d(TAG, "    currentPackageName = " + currentPackageName + "  currentActivityName = " + currentActivityName);
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, AccessibilityEvent.eventTypeToString(event.getEventType()) + " - " + event.getPackageName() + " - " + event.getClassName() + "; ");
+            Log.d(TAG, "    currentPackageName = " + currentPackageName + "  currentActivityName = " + currentActivityName);
+        }
         CharSequence tempPkgName = event.getPackageName();
         CharSequence tempClassName = event.getClassName();
-        if(tempPkgName == null || tempClassName == null) return;
+        if (tempPkgName == null || tempClassName == null) return;
         try {
             switch (event.getEventType()) {
                 case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
-                    if(setIMEApps.contains(tempPkgName)) {
+                    String pkgName = tempPkgName.toString();
+                    if(setIMEApps.contains(pkgName)) {
                         // IME might be temporarily started in the package, skip this event
                         break;
                     }
-
-                    String pkgName = tempPkgName.toString();
                     final String actName = tempClassName.toString();
                     boolean isActivity = !actName.startsWith("android.") && !actName.startsWith("androidx.");
-
                     if(!currentPackageName.equals(pkgName)) {
                         // new package, is it a activity?
                         if(isActivity) {
@@ -262,10 +271,8 @@ public class TouchHelperServiceImpl {
                             // since it's an activity in another package, it must be a new activity, save them
                             currentPackageName = pkgName;
                             currentActivityName = actName;
-
                             // stop current skip ad process if it exists
                             stopSkipAdProcess();
-
                             if(setPackages.contains(pkgName)) {
                                 // if the package is in our list, start skip ads process
                                 // this is the only place to start skip ad process
@@ -289,9 +296,9 @@ public class TouchHelperServiceImpl {
                     // now to take different methods to skip ads
 
                     // first method is to skip ads by position in activity
-                    if (skipad_by_activity_position) {
+                    if (skipAdByActivityPosition) {
                         // run this method for once only
-                        skipad_by_activity_position = false;
+                        skipAdByActivityPosition = false;
 
                         PackagePositionDescription packagePositionDescription = mapPackagePositions.get(currentPackageName);
                         if (packagePositionDescription != null) {
@@ -303,10 +310,12 @@ public class TouchHelperServiceImpl {
                                 int num = 0;
                                 @Override
                                 public void run() {
-                                    if (num < PackagePositionClickRetry) {
+                                    if (num < PACKAGE_POSITION_CLICK_RETRY) {
                                         if(currentActivityName.equals(packagePositionDescription.activityName)) {
                                             // current activity is null, or current activity is the target activity
-//                                            Log.d(TAG, "Find skip-ad by position, simulate click now! ");
+                                            if (BuildConfig.DEBUG) {
+                                                Log.d(TAG, "Find skip-ad by position, simulate click now! ");
+                                            }
                                             click(packagePositionDescription.x, packagePositionDescription.y, 0, 40);
                                         }
                                         num ++;
@@ -314,52 +323,60 @@ public class TouchHelperServiceImpl {
                                         futures[0].cancel(true);
                                     }
                                 }
-                            }, PackagePositionClickFirstDelay, PackagePositionClickRetryInterval, TimeUnit.MILLISECONDS);
+                            }, PACKAGE_POSITION_CLICK_FIRST_DELAY, PACKAGE_POSITION_CLICK_RETRY_INTERVAL, TimeUnit.MILLISECONDS);
                         }
                     }
 
                     // second: skip ads by widget
-                    if (skipad_by_activity_widget) {
-//                        Log.d(TAG, "method by widget in STATE_CHANGED");
+                    if (skipAdByActivityWidget) {
+                        if (BuildConfig.DEBUG) {
+                            Log.d(TAG, "method by widget in STATE_CHANGED");
+                        }
                         // run this once, and find targeted widgets for this package
-                        skipad_by_activity_widget = false;
+                        skipAdByActivityWidget = false;
                         setTargetedWidgets = mapPackageWidgets.get(currentPackageName);
                     }
                     if(setTargetedWidgets != null) {
-//                            Log.d(TAG, "Find skip-ad by widget, simulate click ");
+                        if (BuildConfig.DEBUG) {
+                            Log.d(TAG, "Find skip-ad by widget, simulate click ");
+                        }
                         // this code could be run multiple times
                         final AccessibilityNodeInfo node = service.getRootInActiveWindow();
                         final Set<PackageWidgetDescription> widgets = setTargetedWidgets;
                         taskExecutorService.execute(() -> iterateNodesToSkipAd(node, widgets));
                     }
 
-                    if (skipad_by_keyword) {
-//                        Log.d(TAG, "method by keywords in STATE_CHANGED");
+                    if (skipAdByKeyword) {
+                        if (BuildConfig.DEBUG) {
+                            Log.d(TAG, "method by keywords in STATE_CHANGED");
+                        }
                         // this code could be run multiple times
                         final AccessibilityNodeInfo node = service.getRootInActiveWindow();
                         taskExecutorService.execute(() -> iterateNodesToSkipAd(node, null));
                     }
                     break;
                 case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
-                    if(!setPackages.contains(tempPkgName)) {
+                    if(!setPackages.contains(tempPkgName.toString())) {
                         break;
                     }
 
                     if (setTargetedWidgets != null) {
-//                        Log.d(TAG, "method by widget in CONTENT_CHANGED");
+                        if (BuildConfig.DEBUG) {
+                            Log.d(TAG, "method by widget in CONTENT_CHANGED");
+                        }
                         final AccessibilityNodeInfo node = event.getSource();
                         final Set<PackageWidgetDescription> widgets = setTargetedWidgets;
                         taskExecutorService.execute(() -> iterateNodesToSkipAd(node, widgets));
                     }
 
-                    if (skipad_by_keyword) {
-//                        Log.d(TAG, "method by keywords in CONTENT_CHANGED");
+                    if (skipAdByKeyword) {
+                        if (BuildConfig.DEBUG) {
+                            Log.d(TAG, "method by keywords in CONTENT_CHANGED");
+                        }
                         final AccessibilityNodeInfo node = event.getSource();
                         taskExecutorService.execute(() -> iterateNodesToSkipAd(node, null));
                     }
                     break;
-//                case AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED:
-//                    break;
             }
         } catch (Throwable e) {
             Log.e(TAG, Utilities.getTraceStackInString(e));
@@ -432,7 +449,9 @@ public class TouchHelperServiceImpl {
      * 查找并点击包含keyword控件，目标包括Text和Description
      */
     private boolean skipAdByKeywords(AccessibilityNodeInfo node) {
-//        Log.d(TAG, "skipAdByKeywords triggered: " + Utilities.describeAccessibilityNode(root));
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "skipAdByKeywords triggered: " + Utilities.describeAccessibilityNode(node));
+        }
         CharSequence description = node.getContentDescription();
         CharSequence text = node.getText();
         if (TextUtils.isEmpty(description) && TextUtils.isEmpty(text)) {
@@ -449,20 +468,26 @@ public class TouchHelperServiceImpl {
             }
             if (isFound) {
                 // if this node matches our target, stop finding more keywords
-//                Log.d(TAG, "identify keyword = " + keyword);
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "identify keyword = " + keyword);
+                }
                 break;
             }
         }
         // if this node matches our target, try to click it
         if (isFound) {
             String nodeDesc = Utilities.describeAccessibilityNode(node);
-//            Log.d(TAG, nodeDesc);
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, nodeDesc);
+            }
             if (!clickedWidgets.contains(nodeDesc)) {
                 clickedWidgets.add(nodeDesc);
 
                 ShowToastInIntentService("正在根据关键字跳过广告...");
                 boolean clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-//                        Log.d(TAG, "self clicked = " + clicked);
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "self clicked = " + clicked);
+                }
                 if (!clicked) {
                     Rect rect = new Rect();
                     node.getBoundsInScreen(rect);
@@ -498,7 +523,9 @@ public class TouchHelperServiceImpl {
             }
 
             if (isFound) {
-//                Log.d(TAG, "Find skip-ad by Widget " + e.toString());
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "Find skip-ad by Widget " + e.toString());
+                }
                 String nodeDesc = Utilities.describeAccessibilityNode(node);
                 if(!clickedWidgets.contains(nodeDesc)) {
                     // add this widget to clicked widget, avoid multiple click on the same widget
@@ -538,7 +565,9 @@ public class TouchHelperServiceImpl {
         for (AccessibilityNodeInfo e : roots) {
             if (e == null) continue;
             list.add(e);
-//            Log.d(TAG, indent + Utilities.describeAccessibilityNode(e));
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, indent + Utilities.describeAccessibilityNode(e));
+            }
             for (int n = 0; n < e.getChildCount(); n++) {
                 childrenList.add(e.getChild(n));
             }
@@ -572,23 +601,22 @@ public class TouchHelperServiceImpl {
     private boolean click(int X, int Y, long start_time, long duration) {
         Path path = new Path();
         path.moveTo(X, Y);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            GestureDescription.Builder builder = new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path, start_time, duration));
-            return service.dispatchGesture(builder.build(), null, null);
-        } else {
-            return false;
-        }
+        GestureDescription.Builder builder = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, start_time, duration));
+        return service.dispatchGesture(builder.build(), null, null);
     }
 
     /**
      * start the skip-ad process
      */
     private void startSkipAdProcess() {
-//        Log.d(TAG, "Start Skip-ad process");
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "Start Skip-ad process");
+        }
         skipAdRunning = true;
-        skipad_by_activity_position = true;
-        skipad_by_activity_widget = true;
-        skipad_by_keyword = true;
+        skipAdByActivityPosition = true;
+        skipAdByActivityWidget = true;
+        skipAdByKeyword = true;
         setTargetedWidgets = null;
         clickedWidgets.clear();
 
@@ -601,7 +629,9 @@ public class TouchHelperServiceImpl {
      * stop the skip-ad process
      */
     private void stopSkipAdProcess() {
-//        Log.d(TAG, "Stop Skip-ad process");
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "Stop Skip-ad process");
+        }
         stopSkipAdProcessInner();
         receiverHandler.removeMessages(TouchHelperService.ACTION_STOP_SKIPAD);
     }
@@ -611,9 +641,9 @@ public class TouchHelperServiceImpl {
      */
     private void stopSkipAdProcessInner() {
         skipAdRunning = false;
-        skipad_by_activity_position = false;
-        skipad_by_activity_widget = false;
-        skipad_by_keyword = false;
+        skipAdByActivityPosition = false;
+        skipAdByActivityWidget = false;
+        skipAdByKeyword = false;
         setTargetedWidgets = null;
     }
 
@@ -621,11 +651,11 @@ public class TouchHelperServiceImpl {
      * find all packages while launched. also triggered when receive package add / remove events
      */
     private void updatePackage() {
-//        Log.d(TAG, "updatePackage");
-
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "updatePackage");
+        }
         setPackages = new HashSet<>();
         setIMEApps = new HashSet<>();
-        setHomes = new HashSet<>();
         Set<String> setTemps = new HashSet<>();
 
         // find all launchers
@@ -638,7 +668,7 @@ public class TouchHelperServiceImpl {
         intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
         ResolveInfoList = packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL);
         for (ResolveInfo e : ResolveInfoList) {
-            setHomes.add(e.activityInfo.packageName);
+            setTemps.add(e.activityInfo.packageName);
         }
         // find all input methods
         List<InputMethodInfo> inputMethodInfoList = ((InputMethodManager) service.getSystemService(AccessibilityService.INPUT_METHOD_SERVICE)).getInputMethodList();
@@ -653,10 +683,11 @@ public class TouchHelperServiceImpl {
 
         // remove whitelist, systems, homes & ad-hoc packages from pkgLaunchers
         setPackages.removeAll(setWhiteList);
-        setPackages.removeAll(setHomes);
         setPackages.removeAll(setIMEApps);
         setPackages.removeAll(setTemps);
-//        Log.d(TAG, "Working List = " + pkgLaunchers.toString());
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "Working List = " + setPackages.toString());
+        }
     }
 
     // display activity customization dialog, and allow users to pick widget or positions

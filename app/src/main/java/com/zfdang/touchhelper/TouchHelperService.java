@@ -2,7 +2,6 @@ package com.zfdang.touchhelper;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
-import android.content.res.Configuration;
 import android.view.accessibility.AccessibilityEvent;
 
 import java.lang.ref.WeakReference;
