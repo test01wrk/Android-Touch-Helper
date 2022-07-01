@@ -26,6 +26,7 @@ android {
         multiDexEnabled true
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        resourceConfigurations = ['zh-rCN']
     }
 
     signingConfigs {
@@ -40,7 +41,8 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.release
         }
@@ -55,6 +57,10 @@ android {
                 output.outputFileName = new File("TouchHelper" + "-" + buildType.name + "-v" + defaultConfig.versionName + ".apk" );
             }
         }
+    }
+
+    packagingOptions {
+        exclude "pinyindb/*"
     }
 
 }
