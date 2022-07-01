@@ -16,7 +16,6 @@ import android.graphics.Rect;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Message;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -35,8 +34,6 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.gson.Gson;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -54,7 +51,7 @@ public class TouchHelperServiceImpl {
     private static final String TAG = "TouchHelperServiceImpl";
     // this application, quite frequently this app will be clicked un-expectedly
     private static final String SelfPackageName = "开屏跳过";
-    private AccessibilityService service;
+    private final AccessibilityService service;
 
     private Settings mSetting;
 
@@ -161,7 +158,6 @@ public class TouchHelperServiceImpl {
         // install broadcast receiver for package add / remove; device unlock
         userPresentReceiver = new UserPresentReceiver();
         service.registerReceiver(userPresentReceiver, new IntentFilter(Intent.ACTION_USER_PRESENT));
-
         packageChangeReceiver = new PackageChangeReceiver();
         IntentFilter actions = new IntentFilter();
         actions.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -169,43 +165,38 @@ public class TouchHelperServiceImpl {
         service.registerReceiver(packageChangeReceiver, actions);
 
         // install handler to handle broadcast messages
-        receiverHandler = new Handler(Looper.getMainLooper(), new Handler.Callback() {
-            @Override
-            public boolean handleMessage(Message msg) {
-                switch (msg.what) {
-                    case TouchHelperService.ACTION_REFRESH_KEYWORDS:
-                        keyWordList = mSetting.getKeyWordList();
+        receiverHandler = new Handler(Looper.getMainLooper(), msg -> {
+            switch (msg.what) {
+                case TouchHelperService.ACTION_REFRESH_KEYWORDS:
+                    keyWordList = mSetting.getKeyWordList();
 //                        Log.d(TAG, keyWordList.toString());
-                        break;
-                    case TouchHelperService.ACTION_REFRESH_PACKAGE:
-                        setWhiteList = mSetting.getWhitelistPackages();
+                    break;
+                case TouchHelperService.ACTION_REFRESH_PACKAGE:
+                    setWhiteList = mSetting.getWhitelistPackages();
 //                        Log.d(TAG, setWhiteList.toString());
-                        updatePackage();
-                        break;
-                    case TouchHelperService.ACTION_REFRESH_CUSTOMIZED_ACTIVITY:
-                        mapPackageWidgets = mSetting.getPackageWidgets();
-                        mapPackagePositions = mSetting.getPackagePositions();
+                    updatePackage();
+                    break;
+                case TouchHelperService.ACTION_REFRESH_CUSTOMIZED_ACTIVITY:
+                    mapPackageWidgets = mSetting.getPackageWidgets();
+                    mapPackagePositions = mSetting.getPackagePositions();
 //                        Log.d(TAG, mapActivityWidgets.keySet().toString());
 //                        Log.d(TAG, mapActivityPositions.keySet().toString());
-                        break;
-                    case TouchHelperService.ACTION_STOP_SERVICE:
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            service.disableSelf();
-                        }
-                        break;
-                    case TouchHelperService.ACTION_ACTIVITY_CUSTOMIZATION:
-                        showActivityCustomizationDialog();
-                        break;
-                    case TouchHelperService.ACTION_START_SKIPAD:
+                    break;
+                case TouchHelperService.ACTION_STOP_SERVICE:
+                    service.disableSelf();
+                    break;
+                case TouchHelperService.ACTION_ACTIVITY_CUSTOMIZATION:
+                    showActivityCustomizationDialog();
+                    break;
+                case TouchHelperService.ACTION_START_SKIPAD:
 //                        Log.d(TAG, "resume from wakeup and start to skip ads now ...");
-                        startSkipAdProcess();
-                        break;
-                    case TouchHelperService.ACTION_STOP_SKIPAD:
-                        stopSkipAdProcessInner();
-                        break;
-                }
-                return true;
+                    startSkipAdProcess();
+                    break;
+                case TouchHelperService.ACTION_STOP_SKIPAD:
+                    stopSkipAdProcessInner();
+                    break;
             }
+            return true;
         });
     }
 
@@ -942,7 +933,6 @@ public class TouchHelperServiceImpl {
         btQuit.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Gson gson = new Gson();
                 windowManager.removeViewImmediate(viewTarget);
                 windowManager.removeViewImmediate(viewCustomization);
                 windowManager.removeViewImmediate(imageTarget);
@@ -954,15 +944,11 @@ public class TouchHelperServiceImpl {
     }
 
     public void ShowToastInIntentService(final String sText) {
-        final Context myContext = this.service;
         // show one toast in 5 seconds only
         if(mSetting.isSkipAdNotification()) {
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
-                @Override
-                public void run() {
-                    Toast toast = Toast.makeText(myContext, sText, Toast.LENGTH_SHORT);
-                    toast.show();
-                }
+            receiverHandler.post(() -> {
+                Toast toast = Toast.makeText(service, sText, Toast.LENGTH_SHORT);
+                toast.show();
             });
         };
     };
